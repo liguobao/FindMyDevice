@@ -2,12 +2,10 @@ name: Build and Release
 
 on:
   push:
-    branches: [ main ]
-  release:
-    types: [ published ]
+    tags: [ 'v*' ]
 
 jobs:
-  build:
+  build-and-release:
     runs-on: ubuntu-latest
 
     steps:
@@ -25,28 +23,15 @@ jobs:
     - name: Build with Gradle
       run: ./gradlew assembleDebug
 
-    - name: Upload APK
-      uses: actions/upload-artifact@v4
-      with:
-        name: app-debug
-        path: app/build/outputs/apk/debug/app-debug.apk
+    - name: Rename APK
+      run: mv app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/FindMyDevice-${{ github.ref_name }}.apk
 
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    if: github.event_name == 'release'
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Download APK
-      uses: actions/download-artifact@v4
-      with:
-        name: app-debug
-
-    - name: Upload APK to Release
+    - name: Create Release and Upload APK
       uses: softprops/action-gh-release@v1
       with:
-        files: app-debug.apk
+        files: app/build/outputs/apk/debug/FindMyDevice-${{ github.ref_name }}.apk
+        name: Release ${{ github.ref_name }}
+        draft: false
+        prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
