@@ -12,10 +12,11 @@ class App : Application() {
         private const val PREFS_NAME = "FindMyPrefs"
         private const val KEY_REGION = "region"
         private const val KEY_COOKIES = "cookies"
+        private const val KEY_LAST_URL = "last_url"
 
         // 域名配置
-        const val DOMAIN_CHINA = "https://www.icloud.com.cn/find"
-        const val DOMAIN_INTERNATIONAL = "https://www.icloud.com/find"
+        const val DOMAIN_CHINA = "https://www.icloud.com.cn/"
+        const val DOMAIN_INTERNATIONAL = "https://www.icloud.com/"
 
         lateinit var instance: App
             private set
@@ -63,36 +64,97 @@ class App : Application() {
     }
 
     /**
-     * 保存Cookie
+     * 保存Cookie - 使用更可靠的方式
      */
     fun saveCookies(url: String) {
-        val cookieManager = CookieManager.getInstance()
-        val cookies = cookieManager.getCookie(url)
-        if (cookies != null) {
-            prefs.edit().putString(KEY_COOKIES, cookies).apply()
+        try {
+            val cookieManager = CookieManager.getInstance()
+            val cookies = cookieManager.getCookie(url)
+
+            if (!cookies.isNullOrEmpty()) {
+                // 保存到SharedPreferences
+                prefs.edit().putString(KEY_COOKIES, cookies).apply()
+
+                // 同时保存到CookieManager的持久化存储
+                cookieManager.flush()
+
+                println("Cookies saved successfully: ${cookies.length} chars")
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            println("Error saving cookies: ${e.message}")
         }
     }
 
     /**
-     * 恢复Cookie
+     * 恢复Cookie - 使用更可靠的方式
      */
     fun restoreCookies(url: String) {
-        val cookies = prefs.getString(KEY_COOKIES, null)
-        if (cookies != null) {
-            val cookieManager = CookieManager.getInstance()
-            val cookieList = cookies.split(";")
-            for (cookie in cookieList) {
-                cookieManager.setCookie(url, cookie.trim())
+        try {
+            val savedCookies = prefs.getString(KEY_COOKIES, null)
+
+            if (!savedCookies.isNullOrEmpty()) {
+                val cookieManager = CookieManager.getInstance()
+
+                // 解析并设置每个Cookie
+                val cookieList = savedCookies.split(";")
+                var restoredCount = 0
+
+                for (cookie in cookieList) {
+                    val trimmedCookie = cookie.trim()
+                    if (trimmedCookie.isNotEmpty()) {
+                        cookieManager.setCookie(url, trimmedCookie)
+                        restoredCount++
+                    }
+                }
+
+                // 确保Cookie被持久化
+                cookieManager.flush()
+
+                println("Cookies restored successfully: $restoredCount cookies")
             }
-            cookieManager.flush()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            println("Error restoring cookies: ${e.message}")
         }
     }
 
     /**
-     * 清除保存的Cookie
+     * 保存最后访问的URL
      */
-    fun clearCookies() {
-        prefs.edit().remove(KEY_COOKIES).apply()
+    fun saveLastUrl(url: String) {
+        prefs.edit().putString(KEY_LAST_URL, url).apply()
+        println("Last URL saved: $url")
+    }
+
+    /**
+     * 获取最后访问的URL
+     */
+    fun getLastUrl(): String? {
+        return prefs.getString(KEY_LAST_URL, null)
+    }
+
+    /**
+     * 检查是否有保存的登录状态
+     */
+    fun hasLoginState(): Boolean {
+        val hasCookies = prefs.contains(KEY_COOKIES)
+        val hasUrl = prefs.contains(KEY_LAST_URL)
+        return hasCookies && hasUrl
+    }
+
+    /**
+     * 清除所有保存的状态
+     */
+    fun clearAllState() {
+        prefs.edit()
+            .remove(KEY_COOKIES)
+            .remove(KEY_LAST_URL)
+            .apply()
+
+        // 清除CookieManager的Cookie
         CookieManager.getInstance().removeAllCookies(null)
+
+        println("All saved state cleared")
     }
 }
