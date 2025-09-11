@@ -1,4 +1,4 @@
-package com.findmy.android.ui
+package com.findmydevice.android.ui
 
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
@@ -13,8 +13,8 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
-import com.findmy.android.App
-import com.findmy.android.R
+import com.findmydevice.android.App
+import com.findmydevice.android.R
 
 class WebFindActivity : ComponentActivity() {
 

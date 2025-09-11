@@ -3,11 +3,11 @@
     <application
         android:name=".App"
         android:allowBackup="true"
-        android:label="FindMyAndroid"
+        android:label="FindMyDevice"
         android:icon="@drawable/ic_launcher_foreground"
         android:roundIcon="@drawable/ic_launcher_foreground"
         android:supportsRtl="true"
-        android:theme="@style/Theme.FindMyAndroid">
+        android:theme="@style/Theme.FindMyDevice">
         <activity
             android:name=".ui.WebFindActivity"
             android:exported="true">

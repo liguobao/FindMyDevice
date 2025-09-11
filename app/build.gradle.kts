@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.findmy.android"
+    namespace = "com.findmydevice.android"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.findmy.android"
+        applicationId = "com.findmydevice.android"
         minSdk = 24
         targetSdk = 34
         versionCode = 1

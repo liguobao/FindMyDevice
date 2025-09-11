@@ -1,4 +1,4 @@
-package com.findmy.android
+package com.findmydevice.android
 
 import android.app.Application
 import android.content.Context
