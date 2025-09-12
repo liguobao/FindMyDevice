@@ -3,6 +3,7 @@ package com.findmydevice.android.ui
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
 import android.os.Bundle
+import android.view.MotionEvent
 import android.view.View
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
@@ -15,11 +16,19 @@ import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import com.findmydevice.android.App
 import com.findmydevice.android.R
+import com.google.android.material.floatingactionbutton.FloatingActionButton
+import android.widget.Toast
 
 class WebFindActivity : ComponentActivity() {
 
     private lateinit var webView: WebView
     private lateinit var app: App
+    private lateinit var clearCacheFab: FloatingActionButton
+
+    // 拖拽相关变量
+    private var dX = 0f
+    private var dY = 0f
+    private var lastAction = 0
 
     // JavaScript接口类
     inner class WebAppInterface {
@@ -51,6 +60,7 @@ class WebFindActivity : ComponentActivity() {
         app = App.instance
         webView = findViewById(R.id.webView)
         val progress = findViewById<View>(R.id.progress)
+        clearCacheFab = findViewById(R.id.clearCacheFab)
 
         // Basic secure WebView setup
         webView.settings.javaScriptEnabled = true
@@ -128,6 +138,60 @@ class WebFindActivity : ComponentActivity() {
             }
         }
         onBackPressedDispatcher.addCallback(this, callback)
+
+        // 设置清除缓存FAB的点击监听器
+        clearCacheFab.setOnClickListener {
+            clearWebViewCache()
+        }
+
+        // 设置FAB的拖拽功能
+        setupFabDrag()
+    }
+
+    private fun setupFabDrag() {
+        clearCacheFab.setOnTouchListener { view, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    dX = view.x - event.rawX
+                    dY = view.y - event.rawY
+                    lastAction = MotionEvent.ACTION_DOWN
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val newX = event.rawX + dX
+                    val newY = event.rawY + dY
+
+                    // 获取父布局的尺寸
+                    val parent = view.parent as View
+                    val parentWidth = parent.width
+                    val parentHeight = parent.height
+
+                    // 限制拖拽范围在父布局内
+                    val fabWidth = view.width
+                    val fabHeight = view.height
+
+                    val constrainedX = newX.coerceIn(0f, (parentWidth - fabWidth).toFloat())
+                    val constrainedY = newY.coerceIn(0f, (parentHeight - fabHeight).toFloat())
+
+                    view.animate()
+                        .x(constrainedX)
+                        .y(constrainedY)
+                        .setDuration(0)
+                        .start()
+
+                    lastAction = MotionEvent.ACTION_MOVE
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (lastAction == MotionEvent.ACTION_DOWN) {
+                        // 如果只是点击而不是拖拽，则执行点击事件
+                        view.performClick()
+                    }
+                    true
+                }
+                else -> false
+            }
+        }
     }
 
     private fun injectLoginHelpers() {
@@ -250,5 +314,25 @@ class WebFindActivity : ComponentActivity() {
     private fun loadDefaultDomain() {
         val domain = app.getCurrentDomain()
         webView.loadUrl(domain)
+    }
+
+    private fun clearWebViewCache() {
+        // 显示确认对话框或直接清除
+        webView.clearCache(true)
+        webView.clearHistory()
+        webView.clearFormData()
+
+        // 清除Cookie
+        CookieManager.getInstance().removeAllCookies(null)
+        CookieManager.getInstance().flush()
+
+        // 清除应用保存的登录状态
+        app.clearAllState()
+
+        // 显示提示信息
+        Toast.makeText(this, "缓存已清除", Toast.LENGTH_SHORT).show()
+
+        // 重新加载默认页面
+        loadDefaultDomain()
     }
 }
