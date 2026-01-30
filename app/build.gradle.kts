@@ -8,14 +8,14 @@ android {
     compileSdk = 34
 
     val keystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
-    val storePassword = System.getenv("ANDROID_STORE_PASSWORD")
-    val keyAlias = System.getenv("ANDROID_KEY_ALIAS")
-    val keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+    val envStorePassword = System.getenv("ANDROID_STORE_PASSWORD")
+    val envKeyAlias = System.getenv("ANDROID_KEY_ALIAS")
+    val envKeyPassword = System.getenv("ANDROID_KEY_PASSWORD")
     val hasSigningConfig = listOf(
         keystorePath,
-        storePassword,
-        keyAlias,
-        keyPassword
+        envStorePassword,
+        envKeyAlias,
+        envKeyPassword
     ).all { !it.isNullOrBlank() }
 
     defaultConfig {
@@ -32,9 +32,9 @@ android {
         signingConfigs {
             create("release") {
                 storeFile = file(keystorePath!!)
-                storePassword = storePassword
-                keyAlias = keyAlias
-                keyPassword = keyPassword
+                storePassword = envStorePassword
+                keyAlias = envKeyAlias
+                keyPassword = envKeyPassword
             }
         }
     }

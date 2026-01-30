@@ -2,6 +2,7 @@ package com.findmydevice.android.ui
 
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
+import android.net.Uri
 import android.os.Bundle
 import android.view.MotionEvent
 import android.view.View
@@ -111,21 +112,24 @@ class WebFindActivity : ComponentActivity() {
             }
         }
 
-        // 检查是否有保存的登录状态
-        if (app.hasLoginState()) {
-            // 有保存的状态，先恢复Cookie
+        // 每次启动都打开 iCloud 首页；Cookie 恢复尽量用同 host 的 URL，避免 host/path 不匹配导致“掉登录”。
+        val domain = app.getCurrentDomain()
+        val restoreUrl = run {
             val lastUrl = app.getLastUrl()
-            if (lastUrl != null) {
-                app.restoreCookies(lastUrl)
-                webView.loadUrl(lastUrl)
-                println("Restored to last URL: $lastUrl")
+            if (lastUrl.isNullOrBlank()) {
+                domain
             } else {
-                loadDefaultDomain()
+                val domainHost = Uri.parse(domain).host
+                val lastHost = Uri.parse(lastUrl).host
+                if (!domainHost.isNullOrBlank() && domainHost == lastHost) lastUrl else domain
             }
-        } else {
-            // 没有保存的状态，加载默认域名
-            loadDefaultDomain()
         }
+
+        if (app.hasLoginState()) {
+            app.restoreCookies(restoreUrl)
+        }
+        webView.loadUrl(domain)
+        println("Loaded default domain: $domain (restoreUrl=$restoreUrl)")
 
         // 设置返回按钮处理
         val callback = object : OnBackPressedCallback(true) {
