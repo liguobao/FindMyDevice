@@ -23,16 +23,24 @@ jobs:
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 
+    - name: Decode keystore
+      run: echo "${{ secrets.ANDROID_KEYSTORE_B64 }}" | base64 --decode > $RUNNER_TEMP/findmydevice-release.jks
+
     - name: Build with Gradle
-      run: ./gradlew assembleDebug
+      run: ./gradlew assembleRelease
+      env:
+        ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/findmydevice-release.jks
+        ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+        ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
     - name: Rename APK
-      run: mv app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/FindMyDevice-${{ github.ref_name }}.apk
+      run: mv app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/FindMyDevice-${{ github.ref_name }}.apk
 
     - name: Create Release and Upload APK
       uses: softprops/action-gh-release@v2
       with:
-        files: app/build/outputs/apk/debug/FindMyDevice-${{ github.ref_name }}.apk
+        files: app/build/outputs/apk/release/FindMyDevice-${{ github.ref_name }}.apk
         name: Release ${{ github.ref_name }}
         draft: false
         prerelease: false

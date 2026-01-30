@@ -7,6 +7,17 @@ android {
     namespace = "com.findmydevice.android"
     compileSdk = 34
 
+    val keystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+    val storePassword = System.getenv("ANDROID_STORE_PASSWORD")
+    val keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+    val keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+    val hasSigningConfig = listOf(
+        keystorePath,
+        storePassword,
+        keyAlias,
+        keyPassword
+    ).all { !it.isNullOrBlank() }
+
     defaultConfig {
         applicationId = "com.findmydevice.android"
         minSdk = 24
@@ -17,9 +28,23 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    if (hasSigningConfig) {
+        signingConfigs {
+            create("release") {
+                storeFile = file(keystorePath!!)
+                storePassword = storePassword
+                keyAlias = keyAlias
+                keyPassword = keyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (hasSigningConfig) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
