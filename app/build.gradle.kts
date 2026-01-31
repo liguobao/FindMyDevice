@@ -28,6 +28,14 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // Some OEM installers/scanners are picky; enable v1+v2 signing for maximum compatibility.
+    signingConfigs {
+        getByName("debug") {
+            enableV1Signing = true
+            enableV2Signing = true
+        }
+    }
+
     if (hasSigningConfig) {
         signingConfigs {
             create("release") {
@@ -35,6 +43,9 @@ android {
                 storePassword = envStorePassword
                 keyAlias = envKeyAlias
                 keyPassword = envKeyPassword
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
             }
         }
     }
@@ -52,6 +63,13 @@ android {
         }
         debug {
             isMinifyEnabled = false
+        }
+        // For local builds without a release keystore: produce an installable APK signed with the debug key.
+        // Avoids MIUI/HyperOS "解析软件包时出现问题(33)" caused by installing an unsigned release APK.
+        create("localRelease") {
+            initWith(getByName("release"))
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release")
         }
     }
 

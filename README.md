@@ -32,6 +32,19 @@ To build the app using command line - 使用命令行构建应用：
 ./gradlew assembleDebug
 ```
 
+To build a release APK - 构建 release APK：
+```bash
+./gradlew assembleRelease
+```
+
+Note - 注意：
+- If you build release **without** a keystore, Gradle will output `app-release-unsigned.apk`, which **cannot be installed** on devices (MIUI/HyperOS may show “解析软件包时出现问题(33) / packageInfo is null”).
+- For local testing/distribution without a release keystore, use the debug-signed release variant:
+
+```bash
+./gradlew assembleLocalRelease
+```
+
 To install the app - 安装应用：
 
 ```bash
