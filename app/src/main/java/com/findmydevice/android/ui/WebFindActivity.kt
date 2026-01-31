@@ -25,6 +25,10 @@ class WebFindActivity : ComponentActivity() {
     private lateinit var webView: WebView
     private lateinit var app: App
     private lateinit var clearCacheFab: FloatingActionButton
+    private lateinit var findMyUrl: String
+
+    private var pendingRedirectToFindMy = false
+    private var lastRedirectAtMs: Long = 0
 
     // 拖拽相关变量
     private var dX = 0f
@@ -37,10 +41,13 @@ class WebFindActivity : ComponentActivity() {
         fun saveLoginState() {
             runOnUiThread {
                 webView.url?.let {
+                    app.markLoggedIn()
                     app.saveCookies(it)
                     app.saveLastUrl(it)
                     println("Login state saved from JavaScript")
                 }
+                pendingRedirectToFindMy = true
+                navigateToFindMyIfNeeded(webView.url)
             }
         }
 
@@ -48,7 +55,7 @@ class WebFindActivity : ComponentActivity() {
         fun onFindMyPageLoaded() {
             runOnUiThread {
                 println("Find My page loaded successfully")
-                // 可以在这里添加导航到Find My的具体逻辑
+                app.markLoggedIn()
             }
         }
     }
@@ -59,6 +66,7 @@ class WebFindActivity : ComponentActivity() {
         setContentView(R.layout.activity_webfind)
 
         app = App.instance
+        findMyUrl = app.getFindMyUrl()
         webView = findViewById(R.id.webView)
         val progress = findViewById<View>(R.id.progress)
         clearCacheFab = findViewById(R.id.clearCacheFab)
@@ -90,10 +98,13 @@ class WebFindActivity : ComponentActivity() {
 
                 // 处理iCloud登录页面
                 url?.let { currentUrl ->
-                    if (currentUrl.contains("icloud.com") && !currentUrl.contains("find")) {
-                        // 在iCloud首页，注入JavaScript来自动处理登录选项
+                    if (isICloudUrl(currentUrl)) {
+                        // 注入JavaScript来自动处理登录选项（包括 /find 登录页）
                         injectLoginHelpers()
                     }
+
+                    // 登录后（或已存在登录态）自动跳转到 Find My
+                    navigateToFindMyIfNeeded(currentUrl)
                 }
 
                 // 页面加载完成后保存Cookie和URL
@@ -128,8 +139,9 @@ class WebFindActivity : ComponentActivity() {
         if (app.hasLoginState()) {
             app.restoreCookies(restoreUrl)
         }
-        webView.loadUrl(domain)
-        println("Loaded default domain: $domain (restoreUrl=$restoreUrl)")
+        val initialUrl = if (app.hasLoginState()) findMyUrl else domain
+        webView.loadUrl(initialUrl)
+        println("Loaded initial url: $initialUrl (domain=$domain, findMyUrl=$findMyUrl, restoreUrl=$restoreUrl)")
 
         // 设置返回按钮处理
         val callback = object : OnBackPressedCallback(true) {
@@ -203,6 +215,12 @@ class WebFindActivity : ComponentActivity() {
             (function() {
                 'use strict';
 
+                // 防重复注入（单页应用场景下 onPageFinished 可能多次触发）
+                if (window.__FMD_LOGIN_HELPER_INSTALLED__) {
+                    return;
+                }
+                window.__FMD_LOGIN_HELPER_INSTALLED__ = true;
+
                 // 等待页面加载完成后执行
                 function initLoginHelpers() {
                     console.log('iCloud Login Helper: Initializing...');
@@ -240,6 +258,14 @@ class WebFindActivity : ComponentActivity() {
                             }, 2000);
                         });
                     }
+
+                    // 尝试在登录流程结束后自动进入 Find My（如果已经在 /find 则不会重复跳转）
+                    try {
+                        if (!window.location.href.includes('/find') && !window.location.hash.includes('find')) {
+                            // 这里不强制立即跳转，避免影响验证码/二次验证；交给原生侧 onPageFinished 做兜底跳转。
+                            console.log('iCloud Login Helper: Not on Find My yet, native will handle redirect if needed');
+                        }
+                    } catch (e) {}
 
                     // 监听页面变化，如果跳转到Find My页面，通知原生代码
                     const observer = new MutationObserver(function(mutations) {
@@ -295,6 +321,44 @@ class WebFindActivity : ComponentActivity() {
         webView.evaluateJavascript(jsCode, null)
     }
 
+    private fun isICloudUrl(url: String): Boolean {
+        return try {
+            val host = Uri.parse(url).host ?: return false
+            host.endsWith("icloud.com") || host.endsWith("icloud.com.cn")
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun isFindMyUrl(url: String): Boolean {
+        return try {
+            val uri = Uri.parse(url)
+            val path = uri.path.orEmpty()
+            val frag = uri.fragment.orEmpty()
+            path.startsWith("/find") || frag.contains("find", ignoreCase = true)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun navigateToFindMyIfNeeded(currentUrl: String?) {
+        if (currentUrl.isNullOrBlank()) return
+        if (!isICloudUrl(currentUrl)) return
+        if (isFindMyUrl(currentUrl)) return
+        if (!pendingRedirectToFindMy && !app.hasLoginState()) return
+
+        val now = System.currentTimeMillis()
+        if (now - lastRedirectAtMs < 2_000) return
+        lastRedirectAtMs = now
+        pendingRedirectToFindMy = false
+
+        webView.post {
+            if (webView.url != null && !isFindMyUrl(webView.url!!)) {
+                webView.loadUrl(findMyUrl)
+            }
+        }
+    }
+
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         if (::webView.isInitialized && webView.canGoBack()) {
@@ -332,6 +396,7 @@ class WebFindActivity : ComponentActivity() {
 
         // 清除应用保存的登录状态
         app.clearAllState()
+        pendingRedirectToFindMy = false
 
         // 显示提示信息
         Toast.makeText(this, "缓存已清除", Toast.LENGTH_SHORT).show()

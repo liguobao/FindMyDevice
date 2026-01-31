@@ -13,6 +13,7 @@ class App : Application() {
         private const val KEY_REGION = "region"
         private const val KEY_COOKIES = "cookies"
         private const val KEY_LAST_URL = "last_url"
+        private const val KEY_LOGGED_IN = "logged_in"
 
         // 域名配置
         const val DOMAIN_CHINA = "https://www.icloud.com.cn/"
@@ -61,6 +62,14 @@ class App : Application() {
      */
     fun getCurrentDomain(): String {
         return if (isChinaRegion()) DOMAIN_CHINA else DOMAIN_INTERNATIONAL
+    }
+
+    /**
+     * 获取 Find My 页面 URL
+     */
+    fun getFindMyUrl(): String {
+        val base = getCurrentDomain()
+        return if (base.endsWith("/")) "${base}find" else "$base/find"
     }
 
     /**
@@ -140,7 +149,16 @@ class App : Application() {
     fun hasLoginState(): Boolean {
         val hasCookies = prefs.contains(KEY_COOKIES)
         val hasUrl = prefs.contains(KEY_LAST_URL)
-        return hasCookies && hasUrl
+        if (!hasCookies || !hasUrl) return false
+
+        // 兼容旧版本：之前只要有 cookies+lastUrl 就认为有登录态
+        if (!prefs.contains(KEY_LOGGED_IN)) return true
+
+        return prefs.getBoolean(KEY_LOGGED_IN, false)
+    }
+
+    fun markLoggedIn() {
+        prefs.edit().putBoolean(KEY_LOGGED_IN, true).apply()
     }
 
     /**
@@ -150,6 +168,7 @@ class App : Application() {
         prefs.edit()
             .remove(KEY_COOKIES)
             .remove(KEY_LAST_URL)
+            .remove(KEY_LOGGED_IN)
             .apply()
 
         // 清除CookieManager的Cookie
