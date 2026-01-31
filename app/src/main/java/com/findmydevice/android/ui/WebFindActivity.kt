@@ -11,10 +11,12 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
+import android.webkit.ValueCallback
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.contract.ActivityResultContracts
 import com.findmydevice.android.App
 import com.findmydevice.android.R
 import com.google.android.material.floatingactionbutton.FloatingActionButton
@@ -29,6 +31,7 @@ class WebFindActivity : ComponentActivity() {
 
     private var pendingRedirectToFindMy = false
     private var lastRedirectAtMs: Long = 0
+    private var filePathCallback: ValueCallback<Array<Uri>>? = null
 
     // 拖拽相关变量
     private var dX = 0f
@@ -60,6 +63,24 @@ class WebFindActivity : ComponentActivity() {
         }
     }
 
+    private val openDocumentLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        val callback = filePathCallback
+        filePathCallback = null
+        callback?.onReceiveValue(uri?.let { arrayOf(it) })
+    }
+
+    private val openMultipleDocumentsLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        val callback = filePathCallback
+        filePathCallback = null
+        callback?.onReceiveValue(
+            uris.takeIf { it.isNotEmpty() }?.toTypedArray()
+        )
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -86,7 +107,43 @@ class WebFindActivity : ComponentActivity() {
         // 添加JavaScript接口
         webView.addJavascriptInterface(WebAppInterface(), "Android")
 
-        webView.webChromeClient = object : WebChromeClient() {}
+        webView.webChromeClient = object : WebChromeClient() {
+            override fun onShowFileChooser(
+                webView: WebView?,
+                filePathCallback: ValueCallback<Array<Uri>>?,
+                fileChooserParams: FileChooserParams?
+            ): Boolean {
+                this@WebFindActivity.filePathCallback?.onReceiveValue(null)
+                this@WebFindActivity.filePathCallback = filePathCallback
+
+                val acceptTypes = fileChooserParams?.acceptTypes.orEmpty()
+                    .filter { !it.isNullOrBlank() }
+                    .distinct()
+                    .toTypedArray()
+                    .ifEmpty { arrayOf("*/*") }
+
+                val allowMultiple =
+                    fileChooserParams?.mode == FileChooserParams.MODE_OPEN_MULTIPLE
+
+                return try {
+                    if (allowMultiple) {
+                        openMultipleDocumentsLauncher.launch(acceptTypes)
+                    } else {
+                        openDocumentLauncher.launch(acceptTypes)
+                    }
+                    true
+                } catch (_: Exception) {
+                    this@WebFindActivity.filePathCallback?.onReceiveValue(null)
+                    this@WebFindActivity.filePathCallback = null
+                    Toast.makeText(
+                        this@WebFindActivity,
+                        "无法打开文件选择器，请检查系统文件管理器/权限",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    false
+                }
+            }
+        }
 
         webView.webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
@@ -345,7 +402,9 @@ class WebFindActivity : ComponentActivity() {
         if (currentUrl.isNullOrBlank()) return
         if (!isICloudUrl(currentUrl)) return
         if (isFindMyUrl(currentUrl)) return
-        if (!pendingRedirectToFindMy && !app.hasLoginState()) return
+        // 仅在明确需要时（例如登录流程结束）才自动跳转到 Find My。
+        // 避免在用户访问 iCloud 其他页面（如上传/浏览文件）时被强制打断。
+        if (!pendingRedirectToFindMy) return
 
         val now = System.currentTimeMillis()
         if (now - lastRedirectAtMs < 2_000) return
