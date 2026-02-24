@@ -47,6 +47,7 @@ class WebFindActivity : ComponentActivity() {
     private var lastRedirectAtMs: Long = 0
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
     private var compatibilityUserAgentApplied = false
+    private var enableHarmonyUaCompat = false
 
     // 拖拽相关变量
     private var dX = 0f
@@ -112,6 +113,9 @@ class WebFindActivity : ComponentActivity() {
             finish()
             return
         }
+
+        enableHarmonyUaCompat = isHarmonyEnvironment()
+        println("Harmony UA compatibility enabled: $enableHarmonyUaCompat")
 
         // Basic secure WebView setup
         webView.settings.apply {
@@ -196,6 +200,15 @@ class WebFindActivity : ComponentActivity() {
 
                 // 处理iCloud登录页面
                 url?.let { currentUrl ->
+                    if (enableHarmonyUaCompat &&
+                        !compatibilityUserAgentApplied &&
+                        isLikelyUnsupportedBrowserUrl(currentUrl)
+                    ) {
+                        if (maybeSwitchToCompatibilityUserAgent("unsupported_url", currentUrl)) {
+                            return
+                        }
+                    }
+
                     if (isICloudUrl(currentUrl)) {
                         // 注入JavaScript来自动处理登录选项（包括 /find 登录页）
                         injectLoginHelpers()
@@ -205,7 +218,10 @@ class WebFindActivity : ComponentActivity() {
                     navigateToFindMyIfNeeded(currentUrl)
 
                     // 若命中 iCloud 的“不兼容浏览器”页面，自动降级到兼容 UA 后重试一次。
-                    if (!compatibilityUserAgentApplied && isICloudUrl(currentUrl)) {
+                    if (enableHarmonyUaCompat &&
+                        !compatibilityUserAgentApplied &&
+                        isICloudUrl(currentUrl)
+                    ) {
                         detectUnsupportedBrowserPageAndRetry(currentUrl)
                     }
                 }
@@ -507,12 +523,23 @@ class WebFindActivity : ComponentActivity() {
     }
 
     private fun buildPrimaryUserAgent(base: String): String {
+        if (!enableHarmonyUaCompat) {
+            return base
+        }
+
+        // 若内核明确暴露 WebView 标识，优先使用兼容 UA，避免 iCloud 首屏直接判定为不支持浏览器。
+        val lower = base.lowercase()
+        if (lower.contains("; wv") || lower.contains(" version/4.0 ")) {
+            return IOS_SAFARI_COMPAT_UA
+        }
+
         val compatSuffix = "Version/16.0 Mobile Safari/605.1.15"
         if (base.contains(compatSuffix)) return base
         return "$base AppleWebKit/605.1.15 (KHTML, like Gecko) $compatSuffix"
     }
 
     private fun maybeSwitchToCompatibilityUserAgent(reason: String, failingUrl: String?): Boolean {
+        if (!enableHarmonyUaCompat) return false
         if (compatibilityUserAgentApplied) return false
         if (failingUrl.isNullOrBlank() || !isICloudUrl(failingUrl)) return false
 
@@ -527,11 +554,38 @@ class WebFindActivity : ComponentActivity() {
     }
 
     private fun detectUnsupportedBrowserPageAndRetry(currentUrl: String) {
+        if (!enableHarmonyUaCompat) return
         webView.evaluateJavascript(
             """
             (function() {
                 var text = ((document.body && document.body.innerText) || '').toLowerCase();
-                var unsupported = text.includes('browser') && text.includes('support');
+                var compact = text.replace(/\s+/g, '');
+                var title = (document.title || '').toLowerCase();
+                var href = (window.location && window.location.href ? window.location.href : '').toLowerCase();
+
+                var unsupported = false;
+                var keywords = [
+                    'your browser is currently unsupported',
+                    'browser not supported',
+                    'not supported browser',
+                    '你的浏览器当前不受支持',
+                    '请尝试使用其他浏览器'
+                ];
+
+                for (var i = 0; i < keywords.length; i++) {
+                    var key = keywords[i].toLowerCase();
+                    if (text.includes(key) || compact.includes(key.replace(/\s+/g, ''))) {
+                        unsupported = true;
+                        break;
+                    }
+                }
+
+                if (!unsupported) {
+                    unsupported =
+                        (title.includes('not supported') || title.includes('不受支持')) ||
+                        ((href.includes('unsupported') || href.includes('not_supported')) && href.includes('browser'));
+                }
+
                 return unsupported ? '1' : '0';
             })();
             """.trimIndent()
@@ -540,6 +594,44 @@ class WebFindActivity : ComponentActivity() {
                 maybeSwitchToCompatibilityUserAgent("unsupported_page", currentUrl)
             }
         }
+    }
+
+    private fun isHarmonyEnvironment(): Boolean {
+        if (isHarmonyByBuildEx()) return true
+
+        // HarmonyOS 常见系统属性（在兼容层下也可能暴露）
+        if (!getSystemProperty("hw_sc.build.platform.version").isNullOrBlank()) return true
+        if (!getSystemProperty("persist.sys.hmos.version").isNullOrBlank()) return true
+
+        val display = Build.DISPLAY.orEmpty().lowercase()
+        return display.contains("harmony")
+    }
+
+    private fun isHarmonyByBuildEx(): Boolean {
+        return try {
+            val clazz = Class.forName("com.huawei.system.BuildEx")
+            val method = clazz.getMethod("getOsBrand")
+            val brand = method.invoke(null)?.toString().orEmpty()
+            brand.equals("harmony", ignoreCase = true)
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun getSystemProperty(key: String): String? {
+        return try {
+            val clazz = Class.forName("android.os.SystemProperties")
+            val method = clazz.getMethod("get", String::class.java)
+            (method.invoke(null, key) as? String)?.takeIf { it.isNotBlank() }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun isLikelyUnsupportedBrowserUrl(url: String): Boolean {
+        val lower = url.lowercase()
+        return (lower.contains("unsupported") || lower.contains("not_supported")) &&
+            lower.contains("browser")
     }
 
     private fun isICloudUrl(url: String): Boolean {
