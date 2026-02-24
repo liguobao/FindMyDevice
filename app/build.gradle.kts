@@ -22,8 +22,8 @@ android {
         applicationId = "com.findmydevice.android"
         minSdk = 24
         targetSdk = 34
-        versionCode = 3
-        versionName = "1.3.1"
+        versionCode = 7
+        versionName = "1.3.7"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
