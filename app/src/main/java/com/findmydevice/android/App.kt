@@ -31,7 +31,11 @@ class App : Application() {
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
         // 初始化Cookie管理
-        CookieManager.getInstance().setAcceptCookie(true)
+        try {
+            CookieManager.getInstance().setAcceptCookie(true)
+        } catch (e: Throwable) {
+            println("CookieManager init failed: ${e.message}")
+        }
     }
 
     /**
@@ -172,7 +176,12 @@ class App : Application() {
             .apply()
 
         // 清除CookieManager的Cookie
-        CookieManager.getInstance().removeAllCookies(null)
+        try {
+            CookieManager.getInstance().removeAllCookies(null)
+            CookieManager.getInstance().flush()
+        } catch (e: Throwable) {
+            println("CookieManager clear failed: ${e.message}")
+        }
 
         println("All saved state cleared")
     }

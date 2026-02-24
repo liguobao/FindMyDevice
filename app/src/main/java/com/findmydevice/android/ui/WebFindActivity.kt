@@ -3,13 +3,19 @@ package com.findmydevice.android.ui
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
 import android.net.Uri
+import android.net.http.SslError
+import android.os.Build
 import android.os.Bundle
+import android.os.Message
 import android.view.MotionEvent
 import android.view.View
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
+import android.webkit.SslErrorHandler
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.ValueCallback
 import android.webkit.WebView
@@ -24,6 +30,14 @@ import android.widget.Toast
 
 class WebFindActivity : ComponentActivity() {
 
+    companion object {
+        // iCloud 在部分兼容层 WebView 中会返回不兼容页，降级到 iOS Safari UA 可提升成功率。
+        private const val IOS_SAFARI_COMPAT_UA =
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) " +
+                "AppleWebKit/605.1.15 (KHTML, like Gecko) " +
+                "Version/16.6 Mobile/15E148 Safari/604.1"
+    }
+
     private lateinit var webView: WebView
     private lateinit var app: App
     private lateinit var clearCacheFab: FloatingActionButton
@@ -32,6 +46,7 @@ class WebFindActivity : ComponentActivity() {
     private var pendingRedirectToFindMy = false
     private var lastRedirectAtMs: Long = 0
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
+    private var compatibilityUserAgentApplied = false
 
     // 拖拽相关变量
     private var dX = 0f
@@ -92,17 +107,30 @@ class WebFindActivity : ComponentActivity() {
         val progress = findViewById<View>(R.id.progress)
         clearCacheFab = findViewById(R.id.clearCacheFab)
 
+        if (!ensureWebViewAvailable()) {
+            Toast.makeText(this, "系统WebView不可用，请升级卓易通或系统后重试", Toast.LENGTH_LONG).show()
+            finish()
+            return
+        }
+
         // Basic secure WebView setup
-        webView.settings.javaScriptEnabled = true
-        webView.settings.domStorageEnabled = true
-        webView.settings.databaseEnabled = true
-        webView.settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-        webView.settings.userAgentString = webView.settings.userAgentString +
-            " AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile Safari/605.1.15"
+        webView.settings.apply {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            databaseEnabled = true
+            javaScriptCanOpenWindowsAutomatically = true
+            setSupportMultipleWindows(true)
+            mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+            userAgentString = buildPrimaryUserAgent(userAgentString.orEmpty())
+        }
 
         // Cookie设置
-        CookieManager.getInstance().setAcceptCookie(true)
-        CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
+        try {
+            CookieManager.getInstance().setAcceptCookie(true)
+            CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
+        } catch (e: Throwable) {
+            println("CookieManager setup failed: ${e.message}")
+        }
 
         // 添加JavaScript接口
         webView.addJavascriptInterface(WebAppInterface(), "Android")
@@ -143,6 +171,19 @@ class WebFindActivity : ComponentActivity() {
                     false
                 }
             }
+
+            override fun onCreateWindow(
+                view: WebView?,
+                isDialog: Boolean,
+                isUserGesture: Boolean,
+                resultMsg: Message?
+            ): Boolean {
+                // 兼容部分页面通过 window.open 打开登录/验证页，统一在当前 WebView 内处理。
+                val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
+                transport.webView = webView
+                resultMsg.sendToTarget()
+                return true
+            }
         }
 
         webView.webViewClient = object : WebViewClient() {
@@ -162,6 +203,11 @@ class WebFindActivity : ComponentActivity() {
 
                     // 登录后（或已存在登录态）自动跳转到 Find My
                     navigateToFindMyIfNeeded(currentUrl)
+
+                    // 若命中 iCloud 的“不兼容浏览器”页面，自动降级到兼容 UA 后重试一次。
+                    if (!compatibilityUserAgentApplied && isICloudUrl(currentUrl)) {
+                        detectUnsupportedBrowserPageAndRetry(currentUrl)
+                    }
                 }
 
                 // 页面加载完成后保存Cookie和URL
@@ -169,6 +215,68 @@ class WebFindActivity : ComponentActivity() {
                     app.saveCookies(it)
                     app.saveLastUrl(it)
                 }
+            }
+
+            override fun onReceivedError(
+                view: WebView?,
+                request: WebResourceRequest?,
+                error: WebResourceError?
+            ) {
+                super.onReceivedError(view, request, error)
+                if (request?.isForMainFrame != true) return
+
+                progress.visibility = View.GONE
+                val failingUrl = request.url?.toString().orEmpty()
+                println(
+                    "WebView main-frame error: code=${error?.errorCode}, " +
+                        "desc=${error?.description}, url=$failingUrl"
+                )
+
+                val shouldRetryCompat = error?.errorCode == WebViewClient.ERROR_FAILED_SSL_HANDSHAKE ||
+                    error?.errorCode == WebViewClient.ERROR_UNSUPPORTED_AUTH_SCHEME
+                if (shouldRetryCompat && maybeSwitchToCompatibilityUserAgent("net_${error?.errorCode}", failingUrl)) {
+                    return
+                }
+
+                Toast.makeText(
+                    this@WebFindActivity,
+                    "页面加载失败，请检查网络后重试",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+
+            override fun onReceivedHttpError(
+                view: WebView?,
+                request: WebResourceRequest?,
+                errorResponse: WebResourceResponse?
+            ) {
+                super.onReceivedHttpError(view, request, errorResponse)
+                if (request?.isForMainFrame != true) return
+
+                val statusCode = errorResponse?.statusCode ?: -1
+                val failingUrl = request.url?.toString().orEmpty()
+                println("WebView main-frame HTTP error: status=$statusCode, url=$failingUrl")
+
+                if ((statusCode == 403 || statusCode == 406 || statusCode == 451) &&
+                    maybeSwitchToCompatibilityUserAgent("http_$statusCode", failingUrl)
+                ) {
+                    return
+                }
+            }
+
+            override fun onReceivedSslError(
+                view: WebView?,
+                handler: SslErrorHandler?,
+                error: SslError?
+            ) {
+                progress.visibility = View.GONE
+                println("WebView SSL error: primary=${error?.primaryError}, url=${error?.url}")
+                handler?.cancel()
+                Toast.makeText(
+                    this@WebFindActivity,
+                    "SSL连接失败，请检查设备时间和网络环境",
+                    Toast.LENGTH_SHORT
+                ).show()
             }
 
             @Deprecated("Deprecated in Java")
@@ -378,6 +486,62 @@ class WebFindActivity : ComponentActivity() {
         webView.evaluateJavascript(jsCode, null)
     }
 
+    private fun ensureWebViewAvailable(): Boolean {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val pkg = WebView.getCurrentWebViewPackage()
+                if (pkg == null) {
+                    println("WebView provider not found")
+                    false
+                } else {
+                    println("WebView provider: ${pkg.packageName} ${pkg.versionName}")
+                    true
+                }
+            } else {
+                true
+            }
+        } catch (e: Throwable) {
+            println("WebView provider check failed: ${e.message}")
+            false
+        }
+    }
+
+    private fun buildPrimaryUserAgent(base: String): String {
+        val compatSuffix = "Version/16.0 Mobile Safari/605.1.15"
+        if (base.contains(compatSuffix)) return base
+        return "$base AppleWebKit/605.1.15 (KHTML, like Gecko) $compatSuffix"
+    }
+
+    private fun maybeSwitchToCompatibilityUserAgent(reason: String, failingUrl: String?): Boolean {
+        if (compatibilityUserAgentApplied) return false
+        if (failingUrl.isNullOrBlank() || !isICloudUrl(failingUrl)) return false
+
+        compatibilityUserAgentApplied = true
+        webView.settings.userAgentString = IOS_SAFARI_COMPAT_UA
+        val retryUrl = webView.url ?: app.getCurrentDomain()
+        println("Switch UA to iOS Safari compatibility mode: reason=$reason, retryUrl=$retryUrl")
+
+        Toast.makeText(this, "检测到内核兼容问题，已切换兼容模式重试", Toast.LENGTH_SHORT).show()
+        webView.post { webView.loadUrl(retryUrl) }
+        return true
+    }
+
+    private fun detectUnsupportedBrowserPageAndRetry(currentUrl: String) {
+        webView.evaluateJavascript(
+            """
+            (function() {
+                var text = ((document.body && document.body.innerText) || '').toLowerCase();
+                var unsupported = text.includes('browser') && text.includes('support');
+                return unsupported ? '1' : '0';
+            })();
+            """.trimIndent()
+        ) { result ->
+            if (result == "\"1\"") {
+                maybeSwitchToCompatibilityUserAgent("unsupported_page", currentUrl)
+            }
+        }
+    }
+
     private fun isICloudUrl(url: String): Boolean {
         return try {
             val host = Uri.parse(url).host ?: return false
@@ -450,8 +614,12 @@ class WebFindActivity : ComponentActivity() {
         webView.clearFormData()
 
         // 清除Cookie
-        CookieManager.getInstance().removeAllCookies(null)
-        CookieManager.getInstance().flush()
+        try {
+            CookieManager.getInstance().removeAllCookies(null)
+            CookieManager.getInstance().flush()
+        } catch (e: Throwable) {
+            println("CookieManager clear failed: ${e.message}")
+        }
 
         // 清除应用保存的登录状态
         app.clearAllState()
